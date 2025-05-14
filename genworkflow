@@ -1,0 +1,403 @@
+#!/bin/bash
+# genworkflow - A script to execute the complete video processing workflow
+# This script combines all 5 steps from the workflow guide into a single function
+
+# Set default values
+DEFAULT_START_URL="https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+DEFAULT_MAX_VIDEOS=50
+DEFAULT_MAX_DEPTH=2
+DEFAULT_MAX_CONCURRENT=5
+DEFAULT_VIDEO_QUALITY="720p"
+DEFAULT_VISUALIZATION_TYPE="both"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+RESET='\033[0m'
+
+# Print help message
+function show_help {
+    echo -e "${BLUE}GENWORKFLOW - Complete Video Processing Pipeline${RESET}"
+    echo
+    echo "This script combines video scraping, downloading, processing, and visualization"
+    echo "into a single automated workflow."
+    echo
+    echo -e "${YELLOW}Usage:${RESET}"
+    echo "  ./genworkflow [OPTIONS]"
+    echo
+    echo -e "${YELLOW}Options:${RESET}"
+    echo "  -h, --help                   Show this help message"
+    echo "  -u, --url URL                Starting URL for scraping (default: YouTube example)"
+    echo "  -d, --workdir DIRECTORY      Working directory (default: ~/video-workflow)"
+    echo "  -m, --max-videos NUMBER      Maximum videos to scrape (default: 50)"
+    echo "  -p, --max-depth NUMBER       Maximum depth to crawl (default: 2)"
+    echo "  -c, --max-concurrent NUMBER  Maximum concurrent downloads (default: 5)"
+    echo "  -q, --quality QUALITY        Video quality to download (default: 720p)"
+    echo "  -v, --visualization TYPE     Visualization type: static, web, both (default: both)"
+    echo "  -s, --skip-steps STEPS       Comma-separated list of steps to skip (e.g., 'download,visualize' or '1,4')"
+    echo "                               Possible values: 1|scrape, 2|download, 3|process, 4|visualize"
+    echo "  --no-show                    Don't automatically open visualizations"
+    echo
+    echo -e "${YELLOW}Examples:${RESET}"
+    echo "  ./genworkflow --url https://example.com/video --max-videos 20"
+    echo "  ./genworkflow --workdir /data/videos --quality 1080p"
+    echo "  ./genworkflow --skip-steps download,visualize"
+    echo
+}
+
+# Function to log messages with timestamp and color
+function log {
+    local level=$1
+    local message=$2
+    local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
+    
+    case $level in
+        info)
+            echo -e "${GREEN}[INFO]${RESET} $timestamp: $message"
+            ;;
+        warning)
+            echo -e "${YELLOW}[WARNING]${RESET} $timestamp: $message"
+            ;;
+        error)
+            echo -e "${RED}[ERROR]${RESET} $timestamp: $message"
+            ;;
+        step)
+            echo
+            echo -e "${BLUE}[STEP $message]${RESET}"
+            echo -e "${BLUE}$(printf '=%.0s' {1..50})${RESET}"
+            ;;
+    esac
+}
+
+# Function to check if a command exists
+function check_command {
+    command -v "$1" >/dev/null 2>&1 || { log error "Required command '$1' not found. Please install it."; exit 1; }
+}
+
+# Function to check if Docker is running
+function check_docker {
+    if ! docker info >/dev/null 2>&1; then
+        log warning "Docker is not running. Attempting to start Docker..."
+        sudo systemctl start docker
+        sleep 5
+        
+        if ! docker info >/dev/null 2>&1; then
+            log error "Failed to start Docker. Exiting."
+            exit 1
+        fi
+        
+        log info "Docker started successfully."
+    else
+        log info "Docker is running."
+    fi
+}
+
+# Function to check if Splash container is running
+function check_splash {
+    if ! docker ps | grep -q "scrapinghub/splash"; then
+        log warning "Splash container is not running. Attempting to start Splash..."
+        docker run -d -p 8050:8050 scrapinghub/splash
+        sleep 5
+        
+        if ! docker ps | grep -q "scrapinghub/splash"; then
+            log error "Failed to start Splash container. Exiting."
+            exit 1
+        fi
+        
+        log info "Splash container started successfully."
+    else
+        log info "Splash container is running."
+    fi
+}
+
+# Main workflow function
+function run_workflow {
+    local start_url=$1
+    local work_dir=$2
+    local max_videos=$3
+    local max_depth=$4
+    local max_concurrent=$5
+    local quality=$6
+    local viz_type=$7
+    local skip_steps=$8
+    local show_viz=$9
+    
+    # Create work directories
+    mkdir -p "$work_dir"
+    mkdir -p "$work_dir/screenshots"
+    mkdir -p "$work_dir/downloads"
+    mkdir -p "$work_dir/processed"
+    mkdir -p "$work_dir/visualizations"
+    
+    # Convert skip_steps to array
+    IFS=',' read -ra SKIP <<< "$skip_steps"
+    
+    # Function to check if a step should be skipped
+    function should_skip {
+        local step_name=$1
+        local step_number=$2
+        
+        for step in "${SKIP[@]}"; do
+            # Check if the step matches by name or number
+            if [ "$step" == "$step_name" ] || [ "$step" == "$step_number" ]; then
+                return 0
+            fi
+        done
+        return 1
+    }
+    
+    # Step 1: Scrape videos
+    if ! should_skip "scrape" "1"; then
+        log step "1: Scraping videos from $start_url"
+        check_docker
+        check_splash
+        
+        log info "Starting video scraper..."
+        cd ~/Windsurf/video-projects/video-spider || { log error "video-spider directory not found"; exit 1; }
+        
+        # Run the spider
+        ./run_spider.sh --url "$start_url" \
+            --output-dir "$work_dir" \
+            --screenshots-dir "$work_dir/screenshots" \
+            --max-videos "$max_videos" \
+            --max-depth "$max_depth"
+            
+        if [ $? -ne 0 ]; then
+            log error "Video scraping failed."
+            exit 1
+        fi
+        
+        log info "Video scraping completed successfully."
+    else
+        log info "Skipping video scraping step."
+    fi
+    
+    # Step 2: Download videos
+    if ! should_skip "download" "2"; then
+        log step "2: Downloading videos"
+        
+        # Extract video URLs from the graph
+        log info "Extracting video URLs from graph..."
+        if [ -f "$work_dir/video_relationships.gexf" ]; then
+            grep -o "https://.*\"" "$work_dir/video_relationships.gexf" | tr -d '"' | sort -u > "$work_dir/video_urls.txt"
+            log info "Found $(wc -l < "$work_dir/video_urls.txt") unique video URLs."
+        else
+            log error "Graph file not found: $work_dir/video_relationships.gexf"
+            exit 1
+        fi
+        
+        # Download videos
+        log info "Starting video downloader..."
+        cd ~/Windsurf/video-projects/video-downloader || { log error "video-downloader directory not found"; exit 1; }
+        
+        ./download_videos.sh --input-file "$work_dir/video_urls.txt" \
+            --output-dir "$work_dir/downloads" \
+            --max-concurrent "$max_concurrent" \
+            --quality "$quality"
+            
+        if [ $? -ne 0 ]; then
+            log error "Video downloading failed."
+            exit 1
+        fi
+        
+        log info "Video downloading completed successfully."
+    else
+        log info "Skipping video downloading step."
+    fi
+    
+    # Step 3: Process data
+    if ! should_skip "process" "3"; then
+        log step "3: Processing and analyzing data"
+        
+        log info "Starting data processor..."
+        cd ~/Windsurf/video-projects/data-processor || { log error "data-processor directory not found"; exit 1; }
+        
+        ./process_data.sh --input "$work_dir" \
+            --output-dir "$work_dir/processed" \
+            --formats "csv,json,gexf"
+            
+        if [ $? -ne 0 ]; then
+            log error "Data processing failed."
+            exit 1
+        fi
+        
+        log info "Data processing completed successfully."
+    else
+        log info "Skipping data processing step."
+    fi
+    
+    # Step 4: Visualize graph
+    if ! should_skip "visualize" "4"; then
+        log step "4: Visualizing video relationships"
+        
+        # Find the most recent GEXF file in the processed directory
+        local latest_gexf=$(find "$work_dir/processed" -name "*.gexf" -type f -printf "%T@ %p\n" | sort -n | tail -1 | cut -f2- -d" ")
+        
+        if [ -z "$latest_gexf" ]; then
+            log warning "No GEXF files found in $work_dir/processed. Using original graph."
+            latest_gexf="$work_dir/video_relationships.gexf"
+            
+            if [ ! -f "$latest_gexf" ]; then
+                log error "No graph file found to visualize."
+                exit 1
+            fi
+        fi
+        
+        log info "Visualizing graph: $latest_gexf"
+        cd ~/Windsurf/video-projects/graph-visualizer || { log error "graph-visualizer directory not found"; exit 1; }
+        
+        # Determine whether to show visualization
+        local show_flag=""
+        if [ "$show_viz" = true ]; then
+            show_flag="--show"
+        fi
+        
+        ./visualize_graph.sh --input "$latest_gexf" \
+            --output "$work_dir/visualizations" \
+            --type "$viz_type" \
+            $show_flag
+            
+        if [ $? -ne 0 ]; then
+            log error "Graph visualization failed."
+            exit 1
+        fi
+        
+        log info "Graph visualization completed successfully."
+    else
+        log info "Skipping visualization step."
+    fi
+    
+    # Final summary
+    log step "5: Workflow summary"
+    echo
+    echo -e "${GREEN}Workflow completed successfully!${RESET}"
+    echo
+    echo "Output locations:"
+    echo "  - Scraped data: $work_dir"
+    echo "  - Downloaded videos: $work_dir/downloads"
+    echo "  - Processed data: $work_dir/processed"
+    echo "  - Visualizations: $work_dir/visualizations"
+    echo
+    echo "To explore the visualization results:"
+    
+    if [ -d "$work_dir/visualizations" ] && [ "$(ls -A "$work_dir/visualizations" 2>/dev/null)" ]; then
+        if [ -f "$work_dir/visualizations/index.html" ]; then
+            echo "  Web visualization: $work_dir/visualizations/index.html"
+            echo "  Open in browser: firefox $work_dir/visualizations/index.html"
+        fi
+        
+        local png_file=$(find "$work_dir/visualizations" -name "*.png" | head -1)
+        if [ -n "$png_file" ]; then
+            echo "  Static visualization: $png_file"
+        fi
+    fi
+    
+    echo
+    echo -e "To analyze the data, check: ${BLUE}$work_dir/processed${RESET}"
+    echo
+}
+
+# Parse command line arguments
+POSITIONAL=()
+START_URL="$DEFAULT_START_URL"
+WORK_DIR="$HOME/video-workflow"
+MAX_VIDEOS="$DEFAULT_MAX_VIDEOS"
+MAX_DEPTH="$DEFAULT_MAX_DEPTH"
+MAX_CONCURRENT="$DEFAULT_MAX_CONCURRENT"
+QUALITY="$DEFAULT_VIDEO_QUALITY"
+VIZ_TYPE="$DEFAULT_VISUALIZATION_TYPE"
+SKIP_STEPS=""
+SHOW_VIZ=true
+
+while [[ $# -gt 0 ]]; do
+    key="$1"
+    case $key in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        -u|--url)
+            START_URL="$2"
+            shift
+            shift
+            ;;
+        -d|--workdir)
+            WORK_DIR="$2"
+            shift
+            shift
+            ;;
+        -m|--max-videos)
+            MAX_VIDEOS="$2"
+            shift
+            shift
+            ;;
+        -p|--max-depth)
+            MAX_DEPTH="$2"
+            shift
+            shift
+            ;;
+        -c|--max-concurrent)
+            MAX_CONCURRENT="$2"
+            shift
+            shift
+            ;;
+        -q|--quality)
+            QUALITY="$2"
+            shift
+            shift
+            ;;
+        -v|--visualization)
+            VIZ_TYPE="$2"
+            shift
+            shift
+            ;;
+        -s|--skip-steps)
+            SKIP_STEPS="$2"
+            shift
+            shift
+            ;;
+        --no-show)
+            SHOW_VIZ=false
+            shift
+            ;;
+        *)
+            POSITIONAL+=("$1")
+            shift
+            ;;
+    esac
+done
+
+set -- "${POSITIONAL[@]}"
+
+# Display configuration
+echo -e "${BLUE}=== Video Processing Workflow ===${RESET}"
+echo -e "Starting URL:      ${YELLOW}$START_URL${RESET}"
+echo -e "Working directory: ${YELLOW}$WORK_DIR${RESET}"
+echo -e "Max videos:        ${YELLOW}$MAX_VIDEOS${RESET}"
+echo -e "Max depth:         ${YELLOW}$MAX_DEPTH${RESET}"
+echo -e "Max concurrent:    ${YELLOW}$MAX_CONCURRENT${RESET}"
+echo -e "Video quality:     ${YELLOW}$QUALITY${RESET}"
+echo -e "Visualization:     ${YELLOW}$VIZ_TYPE${RESET}"
+if [ -n "$SKIP_STEPS" ]; then
+    echo -e "Skipping steps:    ${YELLOW}$SKIP_STEPS${RESET}"
+fi
+echo 
+
+# Check for required utilities
+check_command grep
+check_command docker
+check_command find
+check_command sort
+
+# Ask for confirmation
+read -p "Do you want to proceed with this configuration? (y/n) " -n 1 -r
+echo
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Aborted by user."
+    exit 0
+fi
+
+# Run the workflow
+run_workflow "$START_URL" "$WORK_DIR" "$MAX_VIDEOS" "$MAX_DEPTH" "$MAX_CONCURRENT" "$QUALITY" "$VIZ_TYPE" "$SKIP_STEPS" "$SHOW_VIZ"
