@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PipVideo Playlist</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      width: 300px;
+      padding: 10px;
+    }
+    h1 {
+      font-size: 16px;
+      margin-bottom: 10px;
+    }
+    .controls {
+      display: flex;
+      margin-bottom: 10px;
+    }
+    .playlist {
+      max-height: 300px;
+      overflow-y: auto;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      margin-bottom: 10px;
+    }
+    .video-item {
+      padding: 8px;
+      border-bottom: 1px solid #eee;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .video-item:last-child {
+      border-bottom: none;
+    }
+    .video-title {
+      flex-grow: 1;
+      margin-right: 8px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .action-buttons {
+      display: flex;
+    }
+    button {
+      margin-right: 5px;
+      cursor: pointer;
+      padding: 5px 10px;
+      background-color: #f0f0f0;
+      border: 1px solid #ccc;
+      border-radius: 3px;
+    }
+    button:hover {
+      background-color: #e0e0e0;
+    }
+    .primary {
+      background-color: #4285f4;
+      color: white;
+      border: 1px solid #3367d6;
+    }
+    .primary:hover {
+      background-color: #3367d6;
+    }
+    .empty-message {
+      padding: 10px;
+      text-align: center;
+      color: #666;
+    }
+  </style>
+</head>
+<body>
+  <h1>Video Playlist</h1>
+  
+  <div class="controls">
+    <button id="add-current" class="primary">Add Current Video</button>
+    <button id="clear-all">Clear All</button>
+  </div>
+  
+  <div class="playlist" id="playlist-container">
+    <div class="empty-message">No videos in playlist</div>
+  </div>
+  
+  <script src="popup.js"></script>
+</body>
+</html>
