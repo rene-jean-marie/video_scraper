@@ -29,8 +29,18 @@
   ],
   "permissions": [
     "storage",
-    "scripting"
+    "scripting",
+    "contextMenus",
+    "tabs"
   ],
+  "commands": {
+    "toggle-pip": {
+      "suggested_key": {
+        "default": "Alt+P"
+      },
+      "description": "Toggle Picture-in-Picture mode"
+    }
+  },
   "host_permissions": [
     "<all_urls>"
   ],

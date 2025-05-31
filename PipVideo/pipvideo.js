@@ -34,7 +34,9 @@ const sorting = (a, b) => {
   }
 };
 
-chrome.action.onClicked.addListener(async tab => {
+// This function is now registered via commands.onCommand instead of action.onClicked
+// because action.onClicked won't fire when we have a popup
+async function triggerPictureInPicture(tab) {
   try {
     const r = await chrome.scripting.executeScript({
       target: {
@@ -143,6 +145,33 @@ chrome.action.onClicked.addListener(async tab => {
     chrome.action.setTitle({
       tabId: tab.id,
       title: e.message
+    });
+  }
+}
+
+// Create a context menu item for PiP mode
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus.create({
+    id: 'pip-video',
+    title: 'Toggle Picture in Picture',
+    contexts: ['action']
+  });
+});
+
+// Handle context menu click
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId === 'pip-video') {
+    triggerPictureInPicture(tab);
+  }
+});
+
+// Add keyboard command to toggle PiP
+chrome.commands.onCommand.addListener((command) => {
+  if (command === 'toggle-pip') {
+    chrome.tabs.query({active: true, currentWindow: true}, tabs => {
+      if (tabs.length > 0) {
+        triggerPictureInPicture(tabs[0]);
+      }
     });
   }
 });
